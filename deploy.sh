@@ -111,6 +111,7 @@ case "$TARGET" in
             mv "${SCRIPT_DIR}/Packs/uploadable_packs/uploadable_packs/ImpervaIncapsula.zip" "${SCRIPT_DIR}/Packs/uploadable_packs/ImpervaIncapsula.zip"
         fi
         rm -rf "${SCRIPT_DIR}/Packs/uploadable_packs/uploadable_packs" "${SCRIPT_DIR}/Packs/uploadable_packs/content_packs"
+        git checkout -- "${SCRIPT_DIR}/${PACK_PATH}/README.md" 2>/dev/null || true
         if [ -f "${SCRIPT_DIR}/Packs/uploadable_packs/ImpervaIncapsula.zip" ]; then
             print_success "Pack compiled to Packs/uploadable_packs/ImpervaIncapsula.zip"
         else
