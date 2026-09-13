@@ -10,14 +10,14 @@ This document provides a comprehensive technical overview and instruction set fo
 * **Target Platform**: Cortex XSIAM (Marketplace: `marketplacev2`, Platform: `xsiam`).
 * **Ingestion Dataset**: `imperva_siemintegration_raw` (Vendor: `Imperva`, Product: `SIEMIntegration`).
 * **Source Data**: CEF (Common Event Format) access and security logs retrieved from the Imperva Incapsula Log Server API (`https://logs.incapsula.com/`).
-* **Repository**: [https://github.com/primasr/xsiam-workspace](https://github.com/primasr/xsiam-workspace) (Branch: `master`).
+* **Repository**: [https://github.com/primasr/xsiam-imperva-incapsula-community-pack](https://github.com/primasr/xsiam-imperva-incapsula-community-pack) (Branch: `main`).
 
 ---
 
 ## 2. Directory & File Structure
 
 ```text
-/home/primasr/Grinding/XSIAM/
+/home/primasr/Grinding/xsiam-imperva-incapsula-community-pack/
 ├── .env.dev                                   # Development tenant connection credentials (Git-ignored)
 ├── .env.prod                                  # Production tenant connection credentials (Git-ignored)
 ├── .env.example                               # Public template for XSIAM credentials
@@ -97,7 +97,7 @@ All deployment operations are automated using the [`deploy.sh`](deploy.sh) scrip
 2. **Release Versioning**:
    - Create `Packs/ImpervaIncapsula/ReleaseNotes/<version>.md` (e.g. `2_1_1.md`).
    - Bump `"currentVersion"` in `Packs/ImpervaIncapsula/pack_metadata.json`.
-   - Commit & push to GitHub (`master`).
+   - Commit & push to GitHub (`main`).
 3. **Deploy to PROD**:
    - Run `./deploy.sh prod` and confirm the prompt (`[y/N]`).
    - Verify PROD health module and dataset ingestion.
