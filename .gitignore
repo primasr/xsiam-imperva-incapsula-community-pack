@@ -1,0 +1,39 @@
+venv-demisto
+venv-demisto/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Secrets & Environment Variables (Ignore all .env files except .env.example)
+.env
+.env.*
+!.env.example
+*.env
+*.key
+*.pem
+
+# Logs, Bundles & Temporary Files
+*.log
+*.zip
+*.tsv
+*.xlsx
+state.json
+scratch/
+scratch_test/
+
+# Generated Pack distribution archives
+Packs/uploadable_packs/
+
+# Local Demisto testing stubs & cache
+demistomock.py
+CommonServerPython.py
+CommonServerUserPython.py
+DemistoClassApiModule.py
+Tests/
+id_set.json
+.report*
+.coverage
+htmlcov/
