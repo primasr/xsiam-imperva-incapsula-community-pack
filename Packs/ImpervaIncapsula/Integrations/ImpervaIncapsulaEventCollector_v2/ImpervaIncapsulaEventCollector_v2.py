@@ -5,13 +5,16 @@ logs from the Imperva Incapsula Log Server into Cortex XSIAM.
 """
 
 from base64 import b64encode
+import concurrent.futures
 import json
 import re
 import time
 import traceback
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import zlib
 
+import requests
+import requests.adapters
 import urllib3
 
 # Suppress insecure HTTPS request warnings if verify is disabled
@@ -20,7 +23,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 """ CONSTANTS """
 INTEGRATION_NAME = "Imperva Incapsula Event Collector v2"
 LOG_PREFIX = "[Imperva Incapsula Collector v2]"
-DEFAULT_MAX_LOGS = 10
+DEFAULT_MAX_LOGS = 100
+DEFAULT_MAX_WORKERS = 8
 VENDOR = "Imperva"
 PRODUCT = "SIEMIntegration"
 
@@ -40,7 +44,7 @@ EXT_PATTERN = re.compile(r"(?:^|\s+)([a-zA-Z0-9_]+)=")
 class Client(BaseClient):
     """Client class to interact with Imperva Incapsula Log Server API."""
 
-    def __init__(self, base_url="", api_id="", api_key="", verify=False, proxy=False):
+    def __init__(self, base_url="", api_id="", api_key="", verify=False, proxy=False, max_workers=DEFAULT_MAX_WORKERS):
         if base_url and not base_url.endswith("/"):
             base_url += "/"
 
@@ -48,11 +52,25 @@ class Client(BaseClient):
         encoded_credentials = b64encode(credentials.encode("utf-8")).decode("utf-8")
         headers = {
             "Authorization": "Basic {}".format(encoded_credentials),
-            "Connection": "close",
+            "Connection": "keep-alive",
             "Accept-Encoding": "gzip, deflate, identity"
         }
 
         super().__init__(base_url=base_url, verify=verify, headers=headers, proxy=proxy)
+
+        # Configure session connection pooling for high-throughput concurrent downloads
+        try:
+            pool_size = max(16, max_workers * 2)
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=pool_size,
+                pool_maxsize=pool_size,
+                max_retries=3
+            )
+            if hasattr(self, "_session") and self._session:
+                self._session.mount("https://", adapter)
+                self._session.mount("http://", adapter)
+        except Exception as e:
+            demisto.debug("{} Non-critical error configuring session adapter pool: {}".format(LOG_PREFIX, e))
 
     def get_logs_index(self):
         """Fetch the list of log files available on the server (logs.index) with retry backoff."""
@@ -260,6 +278,19 @@ def decompress_and_parse_cef(raw_data, file_name):
     return fixed_events
 
 
+def process_single_log_file(client: Client, file_info: Tuple[int, str]) -> Tuple[int, str, List[str], Optional[str]]:
+    """Worker task: downloads, decompresses, and sanitizes CEF events for a single log file."""
+    file_id, file_name = file_info
+    try:
+        raw_content = client.get_log_file(file_name)
+        log_events = decompress_and_parse_cef(raw_content, file_name)
+        return file_id, file_name, log_events, None
+    except Exception as e:
+        err_msg = "{} ({})".format(file_name, str(e))
+        demisto.error("{} Error processing file {}: {}\n{}".format(LOG_PREFIX, file_name, e, traceback.format_exc()))
+        return file_id, file_name, [], err_msg
+
+
 """ COMMAND FUNCTIONS """
 
 
@@ -311,12 +342,16 @@ def safe_send_events_to_xsiam(events: List[str], vendor: str, product: str) -> N
             time.sleep(2 * attempt)
 
 
-def fetch_events(client, last_run, max_logs, starting_file_id):
-    """Fetches new log files incrementally and extracts CEF events for XSIAM."""
+def fetch_events(client, last_run, max_logs=DEFAULT_MAX_LOGS, starting_file_id=0, max_workers=DEFAULT_MAX_WORKERS):
+    """Fetches new log files concurrently using ThreadPoolExecutor and extracts CEF events for XSIAM."""
     start_time = time.time()
     last_file_id = int(last_run.get("last_file_id", 0))
     last_file_id = max(last_file_id, starting_file_id)
-    demisto.debug("{} Starting fetch from last_file_id={}, max_logs={}".format(LOG_PREFIX, last_file_id, max_logs))
+    demisto.info(
+        "{} Starting fetch cycle: last_file_id={}, max_logs={}, max_workers={}".format(
+            LOG_PREFIX, last_file_id, max_logs, max_workers
+        )
+    )
 
     try:
         idx = client.get_logs_index()
@@ -334,47 +369,74 @@ def fetch_events(client, last_run, max_logs, starting_file_id):
     candidate_files.sort(key=lambda x: x[0])
     total_eligible = len(candidate_files)
 
-    if len(candidate_files) > max_logs:
+    if total_eligible > max_logs:
         candidate_files = candidate_files[:max_logs]
-        demisto.debug("{} Capping batch to {} of {} eligible files.".format(LOG_PREFIX, max_logs, total_eligible))
+        demisto.info("{} Backlog detected: processing capped batch of {} / {} eligible files.".format(LOG_PREFIX, max_logs, total_eligible))
     else:
-        demisto.debug("{} Processing {} eligible files.".format(LOG_PREFIX, total_eligible))
+        demisto.info("{} Processing all {} eligible files.".format(LOG_PREFIX, total_eligible))
+
+    if not candidate_files:
+        demisto.debug("{} No new files to process. Up to date at file ID {}.".format(LOG_PREFIX, last_file_id))
+        return {"last_file_id": last_file_id, "event_count": 0}, []
 
     max_file_id = last_file_id
-    events = []
+    all_events = []
     failed_files = []
 
-    for file_id, file in candidate_files:
-        # Time budget check: prevent Docker container timeout by yielding remaining files to next cycle
+    # Process files in parallel batches using ThreadPoolExecutor (inspired by Imperva LogsDownloader.py)
+    chunk_size = max(4, max_workers * 2)
+
+    for i in range(0, len(candidate_files), chunk_size):
         elapsed = time.time() - start_time
         if elapsed > FETCH_TIMEOUT_SAFETY_SECONDS:
             demisto.info(
                 "{} Approaching execution timeout limit ({}s elapsed). "
                 "Yielding current batch with {} parsed events up to file ID {}. "
-                "Remaining files will be processed in the next polling cycle.".format(
-                    LOG_PREFIX, round(elapsed, 1), len(events), max_file_id
+                "Remaining {} files will be processed in the next polling cycle.".format(
+                    LOG_PREFIX, round(elapsed, 1), len(all_events), max_file_id, len(candidate_files) - i
                 )
             )
             break
 
-        try:
-            raw_content = client.get_log_file(file)
-            log_events = decompress_and_parse_cef(raw_content, file)
-            events.extend(log_events)
-            max_file_id = max(max_file_id, file_id)
-        except Exception as e:
-            failed_files.append("{} ({})".format(file, e))
-            demisto.error("{} Error processing file {}: {}\n{}".format(LOG_PREFIX, file, e, traceback.format_exc()))
+        chunk = candidate_files[i:i + chunk_size]
+        demisto.debug("{} Spawning {} parallel download workers for chunk [{}..{}]".format(
+            LOG_PREFIX, min(len(chunk), max_workers), chunk[0][0], chunk[-1][0]
+        ))
+
+        chunk_results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_file = {executor.submit(process_single_log_file, client, item): item for item in chunk}
+            for future in concurrent.futures.as_completed(future_to_file):
+                try:
+                    res = future.result()
+                    chunk_results.append(res)
+                except Exception as e:
+                    item = future_to_file[future]
+                    failed_files.append("{} ({})".format(item[1], str(e)))
+
+        # Sort chunk results chronologically by file_id to preserve stream order
+        chunk_results.sort(key=lambda x: x[0])
+
+        for f_id, f_name, f_events, f_err in chunk_results:
+            if f_err:
+                failed_files.append(f_err)
+            else:
+                all_events.extend(f_events)
+                max_file_id = max(max_file_id, f_id)
 
     if failed_files:
         demisto.error("{} Errors encountered on {} file(s): {}".format(LOG_PREFIX, len(failed_files), ", ".join(failed_files)))
 
     next_run = {
         "last_file_id": max_file_id,
-        "event_count": len(events)
+        "event_count": len(all_events)
     }
-    demisto.debug("{} Fetch complete. Parsed {} events. Next state: {}".format(LOG_PREFIX, len(events), next_run))
-    return next_run, events
+    demisto.info(
+        "{} Fetch complete in {:.2f}s. Extracted {} events from {} files. Advanced checkpoint to {}.".format(
+            LOG_PREFIX, time.time() - start_time, len(all_events), len(candidate_files), max_file_id
+        )
+    )
+    return next_run, all_events
 
 
 def get_logs_index_command(client, args):
@@ -468,6 +530,7 @@ def main():
     proxy = params.get("proxy", False)
 
     max_logs = arg_to_number(params.get("max_logs")) or DEFAULT_MAX_LOGS
+    max_workers = arg_to_number(params.get("max_workers")) or DEFAULT_MAX_WORKERS
     starting_file_id = arg_to_number(params.get("starting_file_id")) or 0
 
     demisto.debug("{} Executing command: {}".format(LOG_PREFIX, command))
@@ -478,7 +541,8 @@ def main():
             api_id=api_id,
             api_key=api_key,
             verify=verify_certificate,
-            proxy=proxy
+            proxy=proxy,
+            max_workers=max_workers
         )
 
         if command == "test-module":
@@ -490,7 +554,8 @@ def main():
                     client=client,
                     last_run=demisto.getLastRun(),
                     max_logs=max_logs,
-                    starting_file_id=starting_file_id
+                    starting_file_id=starting_file_id,
+                    max_workers=max_workers
                 )
                 safe_send_events_to_xsiam(events=events, vendor=VENDOR, product=PRODUCT)
                 demisto.setLastRun(next_run)

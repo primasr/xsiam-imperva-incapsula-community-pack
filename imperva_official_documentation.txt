@@ -1,0 +1,18 @@
+# Imperva
+## Log Configuration File
+https://docs-cybersec.thalesgroup.com/bundle/cloud-application-security/page/more/log-configuration.htm
+
+## Cloud WAF Log Integration
+https://docs-cybersec.thalesgroup.com/bundle/cloud-application-security/page/settings/log-integration.htm
+
+## Near Real-Time SIEM Log Integration
+https://docs-cybersec.thalesgroup.com/bundle/cloud-application-security/page/siem-log-overview.htm
+
+## Configure the SIEM Log Integration
+https://docs-cybersec.thalesgroup.com/bundle/cloud-application-security/page/siem-log-configuration.htm
+
+## Expanded Imperva API Delivery Method
+https://docs-cybersec.thalesgroup.com/bundle/cloud-application-security/page/settings/api-connector.htm
+
+## Github Incapsula Logs Downloader
+https://github.com/imperva/incapsula-logs-downloader
