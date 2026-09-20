@@ -23,13 +23,13 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 """ CONSTANTS """
 INTEGRATION_NAME = "Imperva Incapsula Event Collector v2"
 LOG_PREFIX = "[Imperva Incapsula Collector v2]"
-DEFAULT_MAX_LOGS = 100
+DEFAULT_MAX_LOGS = 500
 DEFAULT_MAX_WORKERS = 8
 VENDOR = "Imperva"
 PRODUCT = "SIEMIntegration"
 
-# Safety timeout budget in seconds for background polling (Docker containers typically timeout at 60-120s)
-FETCH_TIMEOUT_SAFETY_SECONDS = 50
+# Safety timeout budget in seconds for background polling (Docker containers typically timeout at 120-180s)
+FETCH_TIMEOUT_SAFETY_SECONDS = 110
 
 # Set of CEF keys that contain structured JSON arrays or objects
 JSON_KEYS = {"cs10", "cs11", "cs12", "cs13", "cs14", "cs15"}
@@ -60,7 +60,7 @@ class Client(BaseClient):
 
         # Configure session connection pooling for high-throughput concurrent downloads
         try:
-            pool_size = max(16, max_workers * 2)
+            pool_size = max(32, max_workers * 2)
             adapter = requests.adapters.HTTPAdapter(
                 pool_connections=pool_size,
                 pool_maxsize=pool_size,

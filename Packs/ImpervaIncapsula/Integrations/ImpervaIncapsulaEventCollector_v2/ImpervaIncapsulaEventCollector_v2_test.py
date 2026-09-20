@@ -246,8 +246,8 @@ def test_fetch_events_timeout_budget_yield():
     sample_cef = b"CEF:0|Imperva|SIEMintegration|1|1|Normal|0|src=1.1.1.1\n"
     gzipped_content = gzip.compress(sample_cef)
 
-    # Mock time.time: start=0, first chunk at 0s, second chunk at 55s (exceeds 50s safety limit)
-    time_values = [0.0, 5.0, 55.0, 60.0, 65.0, 70.0]
+    # Mock time.time: start=0, first chunk at 0s, second chunk at 115s (exceeds 110s safety limit)
+    time_values = [0.0, 5.0, 115.0, 120.0, 125.0, 130.0]
     with patch.object(client, "get_logs_index", return_value=mock_index), \
          patch.object(client, "get_log_file", return_value=gzipped_content), \
          patch("time.time", side_effect=time_values):
@@ -261,7 +261,7 @@ def test_fetch_events_timeout_budget_yield():
             max_workers=2
         )
 
-        # First chunk (files 100, 101, 102, 103) processed, second chunk yielded due to elapsed=55s > 50s
+        # First chunk (files 100, 101, 102, 103) processed, second chunk yielded due to elapsed=115s > 110s
         assert len(events) == 4
         assert next_run["last_file_id"] == 103
 
